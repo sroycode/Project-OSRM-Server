@@ -1,0 +1,11 @@
+Threads = 2
+IP = 127.0.0.1
+Port = 5000
+
+hsgrData=/path/to/data/ROUTING/mydata-latest.osrm.hsgr
+nodesData=/path/to/data/ROUTING/mydata-latest.osrm.nodes
+edgesData=/path/to/data/ROUTING/mydata-latest.osrm.edges
+ramIndex=/path/to/data/ROUTING/mydata-latest.osrm.ramIndex
+fileIndex=/path/to/data/ROUTING/mydata-latest.osrm.fileIndex
+namesData=/path/to/data/ROUTING/mydata-latest.osrm.names
+timestamp=/path/to/data/ROUTING/mydata-latest.osrm.timestamp

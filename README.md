@@ -20,6 +20,9 @@ $ make
 Running
 =======
 
+You need to add the path to the osrm generated files
+in server.ini (see the sample)
+
 Same as the main OSRM
 https://github.com/DennisOSRM/Project-OSRM/wiki/Running-OSRM#running-the-engine
 
