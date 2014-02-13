@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 2.6)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 project(OSRM)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(FindPackageHandleStandardArgs)
-set(HUGO "${CMAKE_CURRENT_SOURCE_DIR}")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(GetGitRevisionDescription)
@@ -30,22 +29,27 @@ add_custom_command(OUTPUT ${CMAKE_SOURCE_DIR}/Util/UUID.cpp UUID.cpp.alwaysbuild
 
 add_custom_target(UUIDConfigure DEPENDS ${CMAKE_SOURCE_DIR}/Util/UUID.cpp )
 
-set(BOOST_COMPONENTS filesystem program_options regex system thread)
+set(BOOST_COMPONENTS filesystem iostreams program_options regex system thread)
 
 configure_file(Util/GitDescription.cpp.in ${CMAKE_SOURCE_DIR}/Util/GitDescription.cpp)
 
-add_executable(osrm-routed routed.cpp Util/GitDescription.cpp)
-set_target_properties(osrm-routed PROPERTIES COMPILE_FLAGS -DROUTED)
-
+file(GLOB ServerGlob Server/*.cpp)
 file(GLOB DescriptorGlob Descriptors/*.cpp)
+file(GLOB DatastructureGlob DataStructures/*.cpp)
+file(GLOB AlgorithmGlob Algorithms/*.cpp)
+file(GLOB HttpGlob Server/Http/*.cpp)
 file(GLOB LibOSRMGlob Library/*.cpp)
-file(GLOB SearchEngineSource DataStructures/SearchEngine*.cpp)
-file(GLOB ServerStructureGlob Server/DataStructures/*.cpp)
 
-set(OSRMSources ${LibOSRMGlob} ${DescriptorGlob} ${SearchEngineSource} ${ServerStructureGlob})
-add_library(OSRM SHARED ${OSRMSources})
-add_library(UUID STATIC Util/UUID.cpp)
+set(OSRMSources ${LibOSRMGlob} ${DescriptorGlob} ${DatastructureGlob} ${AlgorithmGlob} ${HttpGlob})
+add_library( OSRM SHARED ${OSRMSources} )
+add_library( UUID STATIC Util/UUID.cpp )
+add_library( GITDESCRIPTION STATIC Util/GitDescription.cpp )
 add_dependencies( UUID UUIDConfigure )
+add_dependencies( GITDESCRIPTION GIT_DESCRIPTION )
+
+add_executable(osrm-routed routed.cpp ${ServerGlob})
+set_target_properties(osrm-routed PROPERTIES COMPILE_FLAGS -DROUTED)
+add_executable(osrm-datastore datastore.cpp)
 
 # Check the release mode
 if(NOT CMAKE_BUILD_TYPE MATCHES Debug)
@@ -58,7 +62,14 @@ if(CMAKE_BUILD_TYPE MATCHES Release)
     message(STATUS "Configuring OSRM in release mode")
 endif(CMAKE_BUILD_TYPE MATCHES Release)
 
-#Configuring compilers
+# set compile switches
+if (NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
+    # not using Visual Studio C++
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fPIC")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fPIC")
+endif()
+
+# Configuring compilers
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
 	# using Clang
 	set(CMAKE_CXX_FLAGS "-Wall -Wno-unknown-pragmas -Wno-unneeded-internal-declaration")
@@ -73,10 +84,22 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 	# using Visual Studio C++
 endif()
 
+# Configuring other platform dependencies
 if(APPLE)
 	SET(CMAKE_OSX_ARCHITECTURES "x86_64")
-	message("Set Architecture to x64 on OS X")
+	message(STATUS "Set Architecture to x64 on OS X")
+    EXEC_PROGRAM(uname ARGS -v  OUTPUT_VARIABLE DARWIN_VERSION)
+    STRING(REGEX MATCH "[0-9]+" DARWIN_VERSION ${DARWIN_VERSION})
+    IF (DARWIN_VERSION GREATER 12)
+        MESSAGE(STATUS "Activating -std=c++11 flag for >= OS X 10.9")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -stdlib=libc++")
+    ENDIF (DARWIN_VERSION GREATER 12)
 endif()
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries( osrm-datastore rt )
+    target_link_libraries( OSRM rt )
+endif(UNIX AND NOT APPLE)
 
 #Check Boost
 set(BOOST_MIN_VERSION "1.44.0")
@@ -91,10 +114,8 @@ IF( APPLE )
 ELSE( APPLE )
 	target_link_libraries( OSRM ${Boost_LIBRARIES} )
 ENDIF( APPLE )
-target_link_libraries( osrm-routed ${Boost_LIBRARIES} OSRM UUID )
-
-find_package ( BZip2 REQUIRED )
-include_directories(${BZIP_INCLUDE_DIRS})
+target_link_libraries( osrm-routed ${Boost_LIBRARIES} OSRM UUID GITDESCRIPTION )
+target_link_libraries( osrm-datastore ${Boost_LIBRARIES} UUID GITDESCRIPTION )
 
 find_package( ZLIB REQUIRED )
 include_directories(${ZLIB_INCLUDE_DIRS})
@@ -102,22 +123,23 @@ target_link_libraries (osrm-routed ${ZLIB_LIBRARY})
 
 find_package( Threads REQUIRED )
 
-find_package( STXXL REQUIRED )
-include_directories(${STXXL_INCLUDE_DIR})
-target_link_libraries (OSRM ${STXXL_LIBRARY})
-
 if(WITH_TOOLS)
-	message("-- Activating OSRM internal tools")
+	message(STATUS "Activating OSRM internal tools")
 	find_package( GDAL )
 	if(GDAL_FOUND)
 		add_executable(osrm-components Tools/componentAnalysis.cpp)
 		include_directories(${GDAL_INCLUDE_DIR})
 		target_link_libraries(
-			osrm-components ${GDAL_LIBRARIES} ${Boost_LIBRARIES} UUID
+			osrm-components ${GDAL_LIBRARIES} ${Boost_LIBRARIES} UUID  GITDESCRIPTION
 		)
 	endif(GDAL_FOUND)
-	add_executable ( osrm-cli Tools/simpleclient.cpp Util/GitDescription.cpp)
-	target_link_libraries( osrm-cli ${Boost_LIBRARIES} OSRM UUID )
+	add_executable ( osrm-cli Tools/simpleclient.cpp)
+	target_link_libraries( osrm-cli ${Boost_LIBRARIES} OSRM UUID GITDESCRIPTION )
     add_executable ( osrm-io-benchmark Tools/io-benchmark.cpp )
-    target_link_libraries( osrm-io-benchmark ${Boost_LIBRARIES} )
+    target_link_libraries( osrm-io-benchmark ${Boost_LIBRARIES} GITDESCRIPTION)
+    add_executable ( osrm-unlock-all Tools/unlock_all_mutexes.cpp )
+    target_link_libraries( osrm-unlock-all ${Boost_LIBRARIES} GITDESCRIPTION)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries( osrm-unlock-all rt )
+    endif(UNIX AND NOT APPLE)
 endif(WITH_TOOLS)

@@ -1,31 +1,41 @@
 /*
-    open source routing machine
-    Copyright (C) Dennis Luxen, others 2010
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU AFFERO General Public License as published by
-the Free Software Foundation; either version 3 of the License, or
-any later version.
+Copyright (c) 2013, Project OSRM, Dennis Luxen, others
+All rights reserved.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
 
-You should have received a copy of the GNU Affero General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-or see http://www.gnu.org/licenses/agpl.txt.
- */
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
 
 #ifndef STATICRTREE_H_
 #define STATICRTREE_H_
 
-#include "MercatorUtil.h"
 #include "Coordinate.h"
-#include "PhantomNodes.h"
 #include "DeallocatingVector.h"
 #include "HilbertValue.h"
+#include "MercatorUtil.h"
+#include "PhantomNodes.h"
+#include "SharedMemoryFactory.h"
+#include "SharedMemoryVectorWrapper.h"
+
 #include "../Util/OSRMException.h"
 #include "../Util/SimpleLogger.h"
 #include "../Util/TimingUtil.h"
@@ -41,12 +51,10 @@ or see http://www.gnu.org/licenses/agpl.txt.
 #include <boost/range/algorithm_ext/erase.hpp>
 #include <boost/noncopyable.hpp>
 #include <boost/thread.hpp>
-
-#include <cassert>
-#include <cfloat>
-#include <climits>
+#include <boost/type_traits.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <queue>
 #include <string>
 #include <vector>
@@ -59,9 +67,9 @@ const static uint32_t RTREE_LEAF_NODE_SIZE = 1170;
 
 static boost::thread_specific_ptr<boost::filesystem::ifstream> thread_local_rtree_stream;
 
-template<class DataT>
+template<class DataT, bool UseSharedMemory = false>
 class StaticRTree : boost::noncopyable {
-private:
+public:
     struct RectangleInt2D {
         RectangleInt2D() :
             min_lon(INT_MAX),
@@ -129,7 +137,7 @@ private:
                 return 0.0;
             }
 
-            double min_dist = DBL_MAX;
+            double min_dist = std::numeric_limits<double>::max();
             min_dist = std::min(
                     min_dist,
                     ApproximateDistance(
@@ -170,7 +178,7 @@ private:
         }
 
         inline double GetMinMaxDist(const FixedPointCoordinate & location) const {
-            double min_max_dist = DBL_MAX;
+            double min_max_dist = std::numeric_limits<double>::max();
             //Get minmax distance to each of the four sides
             FixedPointCoordinate upper_left (max_lat, min_lon);
             FixedPointCoordinate upper_right(max_lat, max_lon);
@@ -233,6 +241,16 @@ private:
 
     typedef RectangleInt2D RectangleT;
 
+    struct TreeNode {
+        TreeNode() : child_count(0), child_is_on_disk(false) {}
+        RectangleT minimum_bounding_rectangle;
+        uint32_t child_count:31;
+        bool child_is_on_disk:1;
+        uint32_t children[RTREE_BRANCHING_FACTOR];
+    };
+
+private:
+
     struct WrappedInputElement {
         explicit WrappedInputElement(
             const uint32_t _array_index,
@@ -255,20 +273,12 @@ private:
         DataT objects[RTREE_LEAF_NODE_SIZE];
     };
 
-    struct TreeNode {
-        TreeNode() : child_count(0), child_is_on_disk(false) {}
-        RectangleT minimum_bounding_rectangle;
-        uint32_t child_count:31;
-        bool child_is_on_disk:1;
-        uint32_t children[RTREE_BRANCHING_FACTOR];
-    };
-
     struct QueryCandidate {
         explicit QueryCandidate(
             const uint32_t n_id,
             const double dist
         ) : node_id(n_id), min_dist(dist) {}
-        QueryCandidate() : node_id(UINT_MAX), min_dist(DBL_MAX) {}
+        QueryCandidate() : node_id(UINT_MAX), min_dist(std::numeric_limits<double>::max()) {}
         uint32_t node_id;
         double min_dist;
         inline bool operator<(const QueryCandidate & other) const {
@@ -276,7 +286,7 @@ private:
         }
     };
 
-    std::vector<TreeNode> m_search_tree;
+    typename ShM<TreeNode, UseSharedMemory>::vector m_search_tree;
     uint64_t m_element_count;
 
     const std::string m_leaf_node_filename;
@@ -410,11 +420,10 @@ public:
 
     //Read-only operation for queries
     explicit StaticRTree(
-            const std::string & node_filename,
-            const std::string & leaf_filename
-    ) : m_leaf_node_filename(leaf_filename) {
+            const boost::filesystem::path & node_file,
+            const boost::filesystem::path & leaf_file
+    ) : m_leaf_node_filename(leaf_file.string()) {
         //open tree node file and load into RAM.
-        boost::filesystem::path node_file(node_filename);
 
         if ( !boost::filesystem::exists( node_file ) ) {
             throw OSRMException("ram index file does not exist");
@@ -430,9 +439,7 @@ public:
         m_search_tree.resize(tree_size);
         tree_node_file.read((char*)&m_search_tree[0], sizeof(TreeNode)*tree_size);
         tree_node_file.close();
-
         //open leaf node file and store thread specific pointer
-        boost::filesystem::path leaf_file(leaf_filename);
         if ( !boost::filesystem::exists( leaf_file ) ) {
             throw OSRMException("mem index file does not exist");
         }
@@ -447,6 +454,34 @@ public:
         //SimpleLogger().Write() << tree_size << " nodes in search tree";
         //SimpleLogger().Write() << m_element_count << " elements in leafs";
     }
+
+    explicit StaticRTree(
+            TreeNode * tree_node_ptr,
+            const uint32_t number_of_nodes,
+            const boost::filesystem::path & leaf_file
+    ) : m_search_tree(tree_node_ptr, number_of_nodes),
+        m_leaf_node_filename(leaf_file.string())
+    {
+        //open leaf node file and store thread specific pointer
+        if ( !boost::filesystem::exists( leaf_file ) ) {
+            throw OSRMException("mem index file does not exist");
+        }
+        if ( 0 == boost::filesystem::file_size( leaf_file ) ) {
+            throw OSRMException("mem index file is empty");
+        }
+
+        boost::filesystem::ifstream leaf_node_file( leaf_file, std::ios::binary );
+        leaf_node_file.read((char*)&m_element_count, sizeof(uint64_t));
+        leaf_node_file.close();
+
+        if( thread_local_rtree_stream.get() ) {
+            thread_local_rtree_stream->close();
+        }
+
+        //SimpleLogger().Write() << tree_size << " nodes in search tree";
+        //SimpleLogger().Write() << m_element_count << " elements in leafs";
+    }
+    //Read-only operation for queries
 /*
     inline void FindKNearestPhantomNodesForCoordinate(
         const FixedPointCoordinate & location,
@@ -461,8 +496,8 @@ public:
         uint32_t io_count = 0;
         uint32_t explored_tree_nodes_count = 0;
         SimpleLogger().Write() << "searching for coordinate " << input_coordinate;
-        double min_dist = DBL_MAX;
-        double min_max_dist = DBL_MAX;
+        double min_dist = std::numeric_limits<double>::max();
+        double min_max_dist = std::numeric_limits<double>::max();
         bool found_a_nearest_edge = false;
 
         FixedPointCoordinate nearest, current_start_coordinate, current_end_coordinate;
@@ -470,7 +505,7 @@ public:
         //initialize queue with root element
         std::priority_queue<QueryCandidate> traversal_queue;
         traversal_queue.push(QueryCandidate(0, m_search_tree[0].minimum_bounding_rectangle.GetMinDist(input_coordinate)));
-        BOOST_ASSERT_MSG(FLT_EPSILON > (0. - traversal_queue.top().min_dist), "Root element in NN Search has min dist != 0.");
+        BOOST_ASSERT_MSG(std::numberic_limits<double>::epsilon() > (0. - traversal_queue.top().min_dist), "Root element in NN Search has min dist != 0.");
 
         while(!traversal_queue.empty()) {
             const QueryCandidate current_query_node = traversal_queue.top(); traversal_queue.pop();
@@ -602,8 +637,8 @@ public:
     ) {
         bool ignore_tiny_components = (zoom_level <= 14);
         DataT nearest_edge;
-        double min_dist = DBL_MAX;
-        double min_max_dist = DBL_MAX;
+        double min_dist = std::numeric_limits<double>::max();
+        double min_max_dist = std::numeric_limits<double>::max();
         bool found_a_nearest_edge = false;
 
         //initialize queue with root element
@@ -614,7 +649,7 @@ public:
         );
 
         BOOST_ASSERT_MSG(
-            FLT_EPSILON > (0. - traversal_queue.top().min_dist),
+            std::numeric_limits<double>::epsilon() > (0. - traversal_queue.top().min_dist),
             "Root element in NN Search has min dist != 0."
         );
 
@@ -714,8 +749,8 @@ public:
         uint32_t io_count = 0;
         uint32_t explored_tree_nodes_count = 0;
         //SimpleLogger().Write() << "searching for coordinate " << input_coordinate;
-        double min_dist = DBL_MAX;
-        double min_max_dist = DBL_MAX;
+        double min_dist = std::numeric_limits<double>::max();
+        double min_max_dist = std::numeric_limits<double>::max();
         bool found_a_nearest_edge = false;
 
         FixedPointCoordinate nearest, current_start_coordinate, current_end_coordinate;
@@ -728,8 +763,8 @@ public:
         );
 
         BOOST_ASSERT_MSG(
-                         FLT_EPSILON > (0. - traversal_queue.top().min_dist),
-                         "Root element in NN Search has min dist != 0."
+            std::numeric_limits<double>::epsilon() > (0. - traversal_queue.top().min_dist),
+            "Root element in NN Search has min dist != 0."
         );
 
         while(!traversal_queue.empty()) {
@@ -744,7 +779,6 @@ public:
                     LeafNode current_leaf_node;
                     LoadLeafFromDisk(current_tree_node.children[0], current_leaf_node);
                     ++io_count;
-                    //SimpleLogger().Write() << "checking " << current_leaf_node.object_count << " elements";
                     for(uint32_t i = 0; i < current_leaf_node.object_count; ++i) {
                         DataT & current_edge = current_leaf_node.objects[i];
                         if(ignore_tiny_components && current_edge.belongsToTinyComponent) {
@@ -798,16 +832,14 @@ public:
                                 current_end_coordinate
                             )
                         ) {
+
                             BOOST_ASSERT_MSG(current_edge.id != result_phantom_node.edgeBasedNode, "IDs not different");
-                            //SimpleLogger().Write() << "found bidirected edge on nodes " << current_edge.id << " and " << result_phantom_node.edgeBasedNode;
                             result_phantom_node.weight2 = current_edge.weight;
                             if(current_edge.id < result_phantom_node.edgeBasedNode) {
                                 result_phantom_node.edgeBasedNode = current_edge.id;
                                 std::swap(result_phantom_node.weight1, result_phantom_node.weight2);
                                 std::swap(current_end_coordinate, current_start_coordinate);
-                            //    SimpleLogger().Write() <<"case 2";
                             }
-                            //SimpleLogger().Write() << "w1: " << result_phantom_node.weight1 << ", w2: " << result_phantom_node.weight2;
                         }
                     }
                 } else {
@@ -883,14 +915,14 @@ private:
             const FixedPointCoordinate& source,
             const FixedPointCoordinate& target,
             FixedPointCoordinate& nearest, double *r) const {
-        const double x = static_cast<double>(inputPoint.lat);
-        const double y = static_cast<double>(inputPoint.lon);
-        const double a = static_cast<double>(source.lat);
-        const double b = static_cast<double>(source.lon);
-        const double c = static_cast<double>(target.lat);
-        const double d = static_cast<double>(target.lon);
+        const double x = inputPoint.lat/COORDINATE_PRECISION;
+        const double y = inputPoint.lon/COORDINATE_PRECISION;
+        const double a = source.lat/COORDINATE_PRECISION;
+        const double b = source.lon/COORDINATE_PRECISION;
+        const double c = target.lat/COORDINATE_PRECISION;
+        const double d = target.lon/COORDINATE_PRECISION;
         double p,q,mX,nY;
-        if(fabs(a-c) > FLT_EPSILON){
+        if(std::fabs(a-c) > std::numeric_limits<double>::epsilon() ){
             const double m = (d-b)/(c-a); // slope
             // Projection of (x,y) on line joining (a,b) and (c,d)
             p = ((x + (m*y)) + (m*m*a - m*b))/(1. + m*m);
@@ -920,8 +952,8 @@ private:
 //            return std::sqrt(((d - y)*(d - y) + (c - x)*(c - x)));
         }
         // point lies in between
-        nearest.lat = p;
-        nearest.lon = q;
+        nearest.lat = p*COORDINATE_PRECISION;
+        nearest.lon = q*COORDINATE_PRECISION;
 //        return std::sqrt((p-x)*(p-x) + (q-y)*(q-y));
         return (p-x)*(p-x) + (q-y)*(q-y);
     }
@@ -931,7 +963,7 @@ private:
     }
 
     inline bool DoubleEpsilonCompare(const double d1, const double d2) const {
-        return (std::fabs(d1 - d2) < FLT_EPSILON);
+        return (std::fabs(d1 - d2) < std::numeric_limits<double>::epsilon() );
     }
 
 };

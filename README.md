@@ -1,36 +1,40 @@
-Project-OSRM-Server
-===================
-
-Sometimes on production machines running vendor-controlled OS, getting the lua parts of osrm to work is a pain.
-For users, who just need osrm-routed on a server ( data is prepared elsewhere ) this may be of use
+# Readme
 
 For instructions on how to compile and run OSRM, please consult the Wiki at
+
 https://github.com/DennisOSRM/Project-OSRM/wiki
 
-Compiling
-=========
+or use our free and daily updated online service at
 
-Mostly 
+http://map.project-osrm.org
 
-$ mkdir build
+## References in publications
 
-$ cd build
+When using the code in a (scientific) publication, please cite
 
-$ cmake ..
+```
+@inproceedings{luxen-vetter-2011,
+ author = {Luxen, Dennis and Vetter, Christian},
+ title = {Real-time routing with OpenStreetMap data},
+ booktitle = {Proceedings of the 19th ACM SIGSPATIAL International Conference on Advances in Geographic Information Systems},
+ series = {GIS '11},
+ year = {2011},
+ isbn = {978-1-4503-1031-4},
+ location = {Chicago, Illinois},
+ pages = {513--516},
+ numpages = {4},
+ url = {http://doi.acm.org/10.1145/2093973.2094062},
+ doi = {10.1145/2093973.2094062},
+ acmid = {2094062},
+ publisher = {ACM},
+ address = {New York, NY, USA},
+}
+```
 
-$ make
+## Current build status
 
-
-Running
-=======
-
-You need to add the path to the osrm generated files
-in server.ini (see the sample)
-
-Same as the main OSRM
-https://github.com/DennisOSRM/Project-OSRM/wiki/Running-OSRM#running-the-engine
-
-Todo
-====
-
-Sorry for the sparse documentation
+| build config |  branch | status |
+|:-------------|:--------|:------------|
+| Project OSRM | master  | [![Build Status](https://travis-ci.org/DennisOSRM/Project-OSRM.png?branch=master)](https://travis-ci.org/DennisOSRM/Project-OSRM) |
+| Project OSRM | develop | [![Build Status](https://travis-ci.org/DennisOSRM/Project-OSRM.png?branch=develop)](https://travis-ci.org/DennisOSRM/Project-OSRM) |
+| LUAbind fork | master  | [![Build Status](https://travis-ci.org/DennisOSRM/luabind.png?branch=master)](https://travis-ci.org/DennisOSRM/luabind) |

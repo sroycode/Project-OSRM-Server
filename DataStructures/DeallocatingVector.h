@@ -1,27 +1,35 @@
 /*
-    open source routing machine
-    Copyright (C) Dennis Luxen, others 2010
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU AFFERO General Public License as published by
-the Free Software Foundation; either version 3 of the License, or
-any later version.
+Copyright (c) 2013, Project OSRM, Dennis Luxen, others
+All rights reserved.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
 
-You should have received a copy of the GNU Affero General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-or see http://www.gnu.org/licenses/agpl.txt.
- */
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
 
 #ifndef DEALLOCATINGVECTOR_H_
 #define DEALLOCATINGVECTOR_H_
 
-#include <cassert>
+#include <boost/assert.hpp>
+#include <cstring>
 #include <vector>
 
 #if __cplusplus > 199711L
@@ -40,43 +48,30 @@ protected:
         //make constructors explicit, so we do not mix random access and deallocation iterators.
         DeallocatingVectorIteratorState();
     public:
-        explicit DeallocatingVectorIteratorState(const DeallocatingVectorIteratorState &r) : mData(r.mData), mIndex(r.mIndex), mBucketList(r.mBucketList) {}
-        //explicit DeallocatingVectorIteratorState(const ElementT * ptr, const std::size_t idx, const std::vector<ElementT *> & input_list) : mData(ptr), mIndex(idx), mBucketList(input_list) {}
-        explicit DeallocatingVectorIteratorState(const std::size_t idx, std::vector<ElementT *> & input_list) : mData(DEALLOCATION_VECTOR_NULL_PTR), mIndex(idx), mBucketList(input_list) {
-            setPointerForIndex();
+        explicit DeallocatingVectorIteratorState(const DeallocatingVectorIteratorState &r) : /*mData(r.mData),*/ mIndex(r.mIndex), mBucketList(r.mBucketList) {}
+        explicit DeallocatingVectorIteratorState(const std::size_t idx, std::vector<ElementT *> & input_list) : /*mData(DEALLOCATION_VECTOR_NULL_PTR),*/ mIndex(idx), mBucketList(input_list) {
         }
-        ElementT * mData;
         std::size_t mIndex;
         std::vector<ElementT *> & mBucketList;
 
-        inline void setPointerForIndex() {
-            if(bucketSizeC*mBucketList.size() <= mIndex) {
-                mData = DEALLOCATION_VECTOR_NULL_PTR;
-                return;
-            }
-            std::size_t _bucket = mIndex/bucketSizeC;
-            std::size_t _index = mIndex%bucketSizeC;
-            mData = &(mBucketList[_bucket][_index]);
-
-            if(DeallocateC) {
-                //if we hopped over the border of the previous bucket, then delete that bucket.
-                if(0 == _index && _bucket) {
-                    delete[] mBucketList[_bucket-1];
-                    mBucketList[_bucket-1] = DEALLOCATION_VECTOR_NULL_PTR;
-                }
-            }
-
-        }
         inline bool operator!=(const DeallocatingVectorIteratorState &other) {
-            return (mData != other.mData) || (mIndex != other.mIndex) || (mBucketList != other.mBucketList);
+            return mIndex != other.mIndex;
         }
 
         inline bool operator==(const DeallocatingVectorIteratorState &other) {
-            return (mData == other.mData) && (mIndex == other.mIndex) && (mBucketList == other.mBucketList);
+            return mIndex == other.mIndex;
         }
 
-        inline bool operator<(const DeallocatingVectorIteratorState &other) {
+        bool operator<(const DeallocatingVectorIteratorState &other) const {
             return mIndex < other.mIndex;
+        }
+
+        bool operator>(const DeallocatingVectorIteratorState &other) const {
+            return mIndex > other.mIndex;
+        }
+
+        bool operator>=(const DeallocatingVectorIteratorState &other) const {
+            return mIndex >= other.mIndex;
         }
 
         //This is a hack to make assignment operator possible with reference member
@@ -104,66 +99,69 @@ public:
     DeallocatingVectorIterator(const DeallocatingVectorIterator<T2> & r) : mState(r.mState) {}
 
     DeallocatingVectorIterator(std::size_t idx, std::vector<ElementT *> & input_list) : mState(idx, input_list) {}
-    //DeallocatingVectorIterator(std::size_t idx, const std::vector<ElementT *> & input_list) : mState(idx, input_list) {}
     DeallocatingVectorIterator(const DeallocatingVectorIteratorState & r) : mState(r) {}
 
     template<typename T2>
     DeallocatingVectorIterator& operator=(const DeallocatingVectorIterator<T2> &r) {
-        if(DeallocateC) assert(false);
+        if(DeallocateC) BOOST_ASSERT(false);
         mState = r.mState; return *this;
     }
 
     inline DeallocatingVectorIterator& operator++() { //prefix
-//        if(DeallocateC) assert(false);
-        ++mState.mIndex; mState.setPointerForIndex(); return *this;
+        ++mState.mIndex;
+        return *this;
     }
 
     inline DeallocatingVectorIterator& operator--() { //prefix
-        if(DeallocateC) assert(false);
-        --mState.mIndex; mState.setPointerForIndex(); return *this;
+        if(DeallocateC) BOOST_ASSERT(false);
+        --mState.mIndex;
+        return *this;
     }
 
     inline DeallocatingVectorIterator operator++(int) { //postfix
         DeallocatingVectorIteratorState _myState(mState);
-        mState.mIndex++; mState.setPointerForIndex();
+        mState.mIndex++;
         return DeallocatingVectorIterator(_myState);
     }
-    inline DeallocatingVectorIterator operator --(int) { //postfix
-        if(DeallocateC) assert(false);
+    inline DeallocatingVectorIterator operator--(int) { //postfix
+        if(DeallocateC) BOOST_ASSERT(false);
         DeallocatingVectorIteratorState _myState(mState);
-        mState.mIndex--; mState.setPointerForIndex();
+        mState.mIndex--;
         return DeallocatingVectorIterator(_myState);
     }
 
     inline DeallocatingVectorIterator operator+(const difference_type& n) const {
         DeallocatingVectorIteratorState _myState(mState);
-        _myState.mIndex+=n; _myState.setPointerForIndex();
+        _myState.mIndex+=n;
         return DeallocatingVectorIterator(_myState);
     }
 
-    inline DeallocatingVectorIterator& operator+=(const difference_type& n) const {
+    inline DeallocatingVectorIterator& operator+=(const difference_type& n) {
         mState.mIndex+=n; return *this;
     }
 
     inline DeallocatingVectorIterator operator-(const difference_type& n) const {
-        if(DeallocateC) assert(false);
+        if(DeallocateC) BOOST_ASSERT(false);
         DeallocatingVectorIteratorState _myState(mState);
-        _myState.mIndex-=n; _myState.setPointerForIndex();
+        _myState.mIndex-=n;
         return DeallocatingVectorIterator(_myState);
     }
 
     inline DeallocatingVectorIterator& operator-=(const difference_type &n) const {
-        if(DeallocateC) assert(false);
+        if(DeallocateC) BOOST_ASSERT(false);
         mState.mIndex-=n; return *this;
     }
-    inline reference operator*() const { return *mState.mData; }
-    inline pointer operator->() const { return mState.mData; }
-    inline reference operator[](const difference_type &n) const {
-        if(DeallocateC) assert(false);
-        DeallocatingVectorIteratorState _myState(mState);
-        _myState.mIndex += n;
-        _myState.setPointerForIndex;
-        return _myState.mData;
+
+    inline reference operator*() const {
+        std::size_t _bucket = mState.mIndex/bucketSizeC;
+        std::size_t _index = mState.mIndex%bucketSizeC;
+        return (mState.mBucketList[_bucket][_index]);
+    }
+
+    inline pointer operator->() const {
+        std::size_t _bucket = mState.mIndex/bucketSizeC;
+        std::size_t _index = mState.mIndex%bucketSizeC;
+        return &(mState.mBucketList[_bucket][_index]);
     }
 
     inline bool operator!=(const DeallocatingVectorIterator & other) {
@@ -174,12 +172,20 @@ public:
         return mState == other.mState;
     }
 
-    bool operator<(const DeallocatingVectorIterator & other) {
+    inline bool operator<(const DeallocatingVectorIterator & other) const {
         return mState < other.mState;
     }
 
+    inline bool operator>(const DeallocatingVectorIterator & other) const {
+        return mState > other.mState;
+    }
+
+    inline bool operator>=(const DeallocatingVectorIterator & other) const {
+        return mState >= other.mState;
+    }
+
     difference_type operator-(const DeallocatingVectorIterator & other) {
-        if(DeallocateC) assert(false);
+        if(DeallocateC) BOOST_ASSERT(false);
         return mState.mIndex-other.mState.mIndex;
     }
 };

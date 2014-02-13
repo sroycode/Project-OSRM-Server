@@ -1,31 +1,38 @@
 /*
-    open source routing machine
-    Copyright (C) Dennis Luxen, 2010
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU AFFERO General Public License as published by
-the Free Software Foundation; either version 3 of the License, or
-any later version.
+Copyright (c) 2013, Project OSRM, Dennis Luxen, others
+All rights reserved.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
 
-You should have received a copy of the GNU Affero General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-or see http://www.gnu.org/licenses/agpl.txt.
- */
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
 
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// #include "Library/OSRM.h"
+*/
+
+#include "Library/OSRM.h"
 
 #include "Server/ServerFactory.h"
 
-#include "Util/IniFile.h"
+#include "Util/GitDescription.h"
 #include "Util/InputFileUtil.h"
 #include "Util/OpenMPWrapper.h"
+#include "Util/ProgramOptions.h"
 #include "Util/SimpleLogger.h"
 #include "Util/UUID.h"
 
@@ -61,21 +68,62 @@ BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
 }
 #endif
 
-int main (int argc, char * argv[]) {
+int main (int argc, const char * argv[]) {
     try {
         LogPolicy::GetInstance().Unmute();
 #ifdef __linux__
-        if(!mlockall(MCL_CURRENT | MCL_FUTURE)) {
-            SimpleLogger().Write(logWARNING) << "Process " << argv[0] << "could not be locked to RAM";
+        if( -1 == mlockall(MCL_CURRENT | MCL_FUTURE) ) {
+            SimpleLogger().Write(logWARNING) <<
+                "Process " << argv[0] << " could not be locked to RAM";
         }
+        installCrashHandler(argv[0]);
 #endif
-#ifdef __linux__
+        bool use_shared_memory = false;
+        std::string ip_address;
+        int ip_port, requested_num_threads;
 
-    installCrashHandler(argv[0]);
-#endif
+        ServerPaths server_paths;
+        if( !GenerateServerProgramOptions(
+                argc,
+                argv,
+                server_paths,
+                ip_address,
+                ip_port,
+                requested_num_threads,
+                use_shared_memory
+             )
+        ) {
+            return 0;
+        }
+
         SimpleLogger().Write() <<
-            "starting up engines, compiled at " << __DATE__ << ", " __TIME__;
+            "starting up engines, " << g_GIT_DESCRIPTION << ", " <<
+            "compiled at " << __DATE__ << ", " __TIME__;
 
+        if( use_shared_memory ) {
+            SimpleLogger().Write(logDEBUG) << "Loading from shared memory";
+        } else {
+            SimpleLogger().Write() <<
+                "HSGR file:\t" << server_paths["hsgrdata"];
+            SimpleLogger().Write(logDEBUG) <<
+                "Nodes file:\t" << server_paths["nodesdata"];
+            SimpleLogger().Write(logDEBUG) <<
+                "Edges file:\t" << server_paths["edgesdata"];
+            SimpleLogger().Write(logDEBUG) <<
+                "RAM file:\t" << server_paths["ramindex"];
+            SimpleLogger().Write(logDEBUG) <<
+                "Index file:\t" << server_paths["fileindex"];
+            SimpleLogger().Write(logDEBUG) <<
+                "Names file:\t" << server_paths["namesdata"];
+            SimpleLogger().Write(logDEBUG) <<
+                "Timestamp file:\t" << server_paths["timestamp"];
+            SimpleLogger().Write(logDEBUG) <<
+                "Threads:\t" << requested_num_threads;
+            SimpleLogger().Write(logDEBUG) <<
+                "IP address:\t" << ip_address;
+            SimpleLogger().Write(logDEBUG) <<
+                "IP port:\t" << ip_port;
+        }
 #ifndef _WIN32
         int sig = 0;
         sigset_t new_mask;
@@ -84,10 +132,13 @@ int main (int argc, char * argv[]) {
         pthread_sigmask(SIG_BLOCK, &new_mask, &old_mask);
 #endif
 
-        IniFile serverConfig((argc > 1 ? argv[1] : "server.ini"));
-        OSRM routing_machine((argc > 1 ? argv[1] : "server.ini"));
+        OSRM routing_machine(server_paths, use_shared_memory);
+        Server * s = ServerFactory::CreateServer(
+                        ip_address,
+                        ip_port,
+                        requested_num_threads
+                     );
 
-        Server * s = ServerFactory::CreateServer(serverConfig);
         s->GetRequestHandlerPtr().RegisterRoutingMachine(&routing_machine);
 
         boost::thread t(boost::bind(&Server::Run, s));
@@ -109,13 +160,13 @@ int main (int argc, char * argv[]) {
         std::cout << "[server] running and waiting for requests" << std::endl;
         s->Run();
 #endif
-
         std::cout << "[server] initiating shutdown" << std::endl;
         s->Stop();
         std::cout << "[server] stopping threads" << std::endl;
 
         if(!t.timed_join(boost::posix_time::seconds(2))) {
-       	    SimpleLogger().Write(logDEBUG) << "Threads did not finish within 2 seconds. Hard abort!";
+       	    SimpleLogger().Write(logDEBUG) <<
+                "Threads did not finish within 2 seconds. Hard abort!";
         }
 
         std::cout << "[server] freeing objects" << std::endl;

@@ -5,7 +5,6 @@
 *.dll
 *.exe
 *.o
-*.so
 
 # Packages #
 ############
@@ -36,8 +35,6 @@ Thumbs.db
 # build related files #
 #######################
 /build/
-/Util/UUID.cpp
-/Util/GitDescription.cpp
 
 # Eclipse related files #
 #########################
@@ -72,11 +69,13 @@ stxxl.errlog
 /win/bin/
 /win/bin-debug/
 /osrm-extract
+/osrm-io-benchmark
+/osrm-components
 /osrm-routed
+/osrm-datastore
 /osrm-prepare
 /osrm-cli
 /nohup.out
-/build
 
 # Sandbox folder #
 ###################

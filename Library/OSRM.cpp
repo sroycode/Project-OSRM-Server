@@ -1,122 +1,131 @@
 /*
-    open source routing machine
-    Copyright (C) Dennis Luxen, 2010
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU AFFERO General Public License as published by
-the Free Software Foundation; either version 3 of the License, or
-any later version.
+Copyright (c) 2013, Project OSRM, Dennis Luxen, others
+All rights reserved.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
 
-You should have received a copy of the GNU Affero General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-or see http://www.gnu.org/licenses/agpl.txt.
- */
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
 
 #include "OSRM.h"
 
-OSRM::OSRM(const char * server_ini_path) {
-    if( !testDataFile(server_ini_path) ){
-        std::string error_message = std::string(server_ini_path) + " not found";
-        throw OSRMException(error_message.c_str());
+OSRM::OSRM( const ServerPaths & server_paths, const bool use_shared_memory )
+ :
+    use_shared_memory(use_shared_memory)
+{
+    if( !use_shared_memory ) {
+        query_data_facade = new InternalDataFacade<QueryEdge::EdgeData>(
+            server_paths
+        );
+    } else {
+        query_data_facade = new SharedDataFacade<QueryEdge::EdgeData>( );
     }
 
-    IniFile serverConfig(server_ini_path);
-
-    boost::filesystem::path base_path =
-               boost::filesystem::absolute(server_ini_path).parent_path();
-
-    if ( !serverConfig.Holds("hsgrData")) {
-        throw OSRMException("no ram index file name in server ini");
-    }
-    if ( !serverConfig.Holds("ramIndex") ) {
-        throw OSRMException("no mem index file name in server ini");
-    }
-    if ( !serverConfig.Holds("fileIndex") ) {
-        throw OSRMException("no nodes file name in server ini");
-    }
-    if ( !serverConfig.Holds("nodesData") ) {
-        throw OSRMException("no nodes file name in server ini");
-    }
-    if ( !serverConfig.Holds("edgesData") ) {
-        throw OSRMException("no edges file name in server ini");
-    }
-
-    boost::filesystem::path hsgr_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("hsgrData"),
-            base_path
+    //The following plugins handle all requests.
+    RegisterPlugin(
+        new HelloWorldPlugin()
     );
-
-    boost::filesystem::path ram_index_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("ramIndex"),
-            base_path
+    RegisterPlugin(
+        new LocatePlugin<BaseDataFacade<QueryEdge::EdgeData> >(
+            query_data_facade
+        )
     );
-
-    boost::filesystem::path file_index_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("fileIndex"),
-            base_path
+    RegisterPlugin(
+        new NearestPlugin<BaseDataFacade<QueryEdge::EdgeData> >(
+            query_data_facade
+        )
     );
-
-    boost::filesystem::path node_data_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("nodesData"),
-            base_path
+    RegisterPlugin(
+        new TimestampPlugin<BaseDataFacade<QueryEdge::EdgeData> >(
+            query_data_facade
+        )
     );
-    boost::filesystem::path edge_data_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("edgesData"),
-            base_path
+    RegisterPlugin(
+        new ViaRoutePlugin<BaseDataFacade<QueryEdge::EdgeData> >(
+            query_data_facade
+        )
     );
-    boost::filesystem::path name_data_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("namesData"),
-            base_path
-    );
-    boost::filesystem::path timestamp_path = boost::filesystem::absolute(
-            serverConfig.GetParameter("timestamp"),
-            base_path
-    );
-
-    objects = new QueryObjectsStorage(
-        hsgr_path.string(),
-        ram_index_path.string(),
-        file_index_path.string(),
-        node_data_path.string(),
-        edge_data_path.string(),
-        name_data_path.string(),
-        timestamp_path.string()
-    );
-
-    RegisterPlugin(new HelloWorldPlugin());
-    RegisterPlugin(new LocatePlugin(objects));
-    RegisterPlugin(new NearestPlugin(objects));
-    RegisterPlugin(new TimestampPlugin(objects));
-    RegisterPlugin(new ViaRoutePlugin(objects));
 }
 
 OSRM::~OSRM() {
-    BOOST_FOREACH(PluginMap::value_type & plugin_pointer, pluginMap) {
+    BOOST_FOREACH(PluginMap::value_type & plugin_pointer, plugin_map) {
         delete plugin_pointer.second;
     }
-    delete objects;
 }
 
 void OSRM::RegisterPlugin(BasePlugin * plugin) {
     SimpleLogger().Write()  << "loaded plugin: " << plugin->GetDescriptor();
-    if( pluginMap.find(plugin->GetDescriptor()) != pluginMap.end() ) {
-        delete pluginMap.find(plugin->GetDescriptor())->second;
+    if( plugin_map.find(plugin->GetDescriptor()) != plugin_map.end() ) {
+        delete plugin_map.find(plugin->GetDescriptor())->second;
     }
-    pluginMap.emplace(plugin->GetDescriptor(), plugin);
+    plugin_map.emplace(plugin->GetDescriptor(), plugin);
 }
 
 void OSRM::RunQuery(RouteParameters & route_parameters, http::Reply & reply) {
-    const PluginMap::const_iterator & iter = pluginMap.find(route_parameters.service);
-    if(pluginMap.end() != iter) {
+    const PluginMap::const_iterator & iter = plugin_map.find(
+        route_parameters.service
+    );
+
+    if(plugin_map.end() != iter) {
         reply.status = http::Reply::ok;
+        if( use_shared_memory ) {
+            // lock update pending
+            boost::interprocess::scoped_lock<
+                boost::interprocess::named_mutex
+            > pending_lock(barrier.pending_update_mutex);
+
+            // lock query
+            boost::interprocess::scoped_lock<
+                boost::interprocess::named_mutex
+            > query_lock(barrier.query_mutex);
+
+            // unlock update pending
+            pending_lock.unlock();
+
+            // increment query count
+            ++(barrier.number_of_queries);
+
+            (static_cast<SharedDataFacade<QueryEdge::EdgeData>* >(query_data_facade))->CheckAndReloadFacade();
+        }
+
         iter->second->HandleRequest(route_parameters, reply );
+        if( use_shared_memory ) {
+            // lock query
+            boost::interprocess::scoped_lock<
+                boost::interprocess::named_mutex
+            > query_lock(barrier.query_mutex);
+
+            // decrement query count
+            --(barrier.number_of_queries);
+            BOOST_ASSERT_MSG(
+                0 <= barrier.number_of_queries,
+                "invalid number of queries"
+            );
+
+            // notify all processes that were waiting for this condition
+            if (0 == barrier.number_of_queries) {
+                barrier.no_running_queries_condition.notify_all();
+            }
+        }
     } else {
-        reply = http::Reply::stockReply(http::Reply::badRequest);
+        reply = http::Reply::StockReply(http::Reply::badRequest);
     }
 }

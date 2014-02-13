@@ -1,22 +1,29 @@
 /*
- open source routing machine
- Copyright (C) Dennis Luxen, others 2010
 
- This program is free software; you can redistribute it and/or modify
- it under the terms of the GNU AFFERO General Public License as published by
- the Free Software Foundation; either version 3 of the License, or
- any later version.
+Copyright (c) 2013, Project OSRM, Dennis Luxen, others
+All rights reserved.
 
- This program is distributed in the hope that it will be useful,
- but WITHOUT ANY WARRANTY; without even the implied warranty of
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- GNU General Public License for more details.
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
 
- You should have received a copy of the GNU Affero General Public License
- along with this program; if not, write to the Free Software
- Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- or see http://www.gnu.org/licenses/agpl.txt.
- */
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
 
 //  This class constructs the edge-expanded routing graph
 
@@ -26,12 +33,14 @@
 #include "../typedefs.h"
 #include "../DataStructures/DeallocatingVector.h"
 #include "../DataStructures/DynamicGraph.h"
+#include "../DataStructures/EdgeBasedNode.h"
 #include "../Extractor/ExtractorStructs.h"
 #include "../DataStructures/HashTable.h"
 #include "../DataStructures/ImportEdge.h"
 #include "../DataStructures/QueryEdge.h"
 #include "../DataStructures/Percent.h"
 #include "../DataStructures/TurnInstructions.h"
+#include "../Util/LuaUtil.h"
 #include "../Util/SimpleLogger.h"
 
 #include <boost/foreach.hpp>
@@ -48,51 +57,6 @@
 
 class EdgeBasedGraphFactory : boost::noncopyable {
 public:
-    struct EdgeBasedNode {
-        EdgeBasedNode() :
-            id(INT_MAX),
-            lat1(INT_MAX),
-            lat2(INT_MAX),
-            lon1(INT_MAX),
-            lon2(INT_MAX >> 1),
-            belongsToTinyComponent(false),
-            nameID(UINT_MAX),
-            weight(UINT_MAX >> 1),
-            ignoreInGrid(false)
-        { }
-
-        bool operator<(const EdgeBasedNode & other) const {
-            return other.id < id;
-        }
-
-        bool operator==(const EdgeBasedNode & other) const {
-            return id == other.id;
-        }
-
-        inline FixedPointCoordinate Centroid() const {
-            FixedPointCoordinate centroid;
-            //The coordinates of the midpoint are given by:
-            //x = (x1 + x2) /2 and y = (y1 + y2) /2.
-            centroid.lon = (std::min(lon1, lon2) + std::max(lon1, lon2))/2;
-            centroid.lat = (std::min(lat1, lat2) + std::max(lat1, lat2))/2;
-            return centroid;
-        }
-
-        inline bool isIgnored() const {
-            return ignoreInGrid;
-        }
-
-        NodeID id;
-        int lat1;
-        int lat2;
-        int lon1;
-        int lon2:31;
-        bool belongsToTinyComponent:1;
-        NodeID nameID;
-        unsigned weight:31;
-        bool ignoreInGrid:1;
-    };
-
     struct SpeedProfileProperties{
         SpeedProfileProperties() :
             trafficSignalPenalty(0),
@@ -115,9 +79,21 @@ public:
         SpeedProfileProperties speed_profile
     );
 
+    void Run(const char * originalEdgeDataFilename, lua_State *myLuaState);
     void GetEdgeBasedEdges( DeallocatingVector< EdgeBasedEdge >& edges );
     void GetEdgeBasedNodes( std::vector< EdgeBasedNode> & nodes);
     void GetOriginalEdgeData( std::vector<OriginalEdgeData> & originalEdgeData);
+    TurnInstruction AnalyzeTurn(
+        const NodeID u,
+        const NodeID v,
+        const NodeID w
+    ) const;
+    int GetTurnPenalty(
+        const NodeID u,
+        const NodeID v,
+        const NodeID w,
+        lua_State *myLuaState
+    ) const;
 
     unsigned GetNumberOfNodes() const;
 
